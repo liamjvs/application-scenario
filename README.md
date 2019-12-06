@@ -88,8 +88,6 @@ This prevents the prying eye from instantly seeing the Storage Account URI for t
 The `./client/break/*.sh` scripts effectively decipher themselves, `curl` a script from the host's Storage Account (`./host/break/*.sh`), execute this script and in some cases, pass this output to another script that is again curled (`./host/break/*a.sh`).
 
 ## Footnotes
-There is an additional task to migrate the IIS service to Azure Web Apps but unfortunately this did not work using the Azure Migrate toolset. I ran out of time preparing for this workshop but the slide and bash script remain.
-
 The command `iisreset` may have to be ran on the/sent to the VM after some networking alterations to drop/reset any open connections. Example being tasks 1 and 3, after fixing the broken application, an `iisreset` was necessary (or you can wait a period of time).
 
 Enjoy.
