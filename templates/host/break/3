@@ -1,0 +1,1 @@
+az network nsg list --resource-group %s --query "[].[name, resourceGroup]" --output tsv

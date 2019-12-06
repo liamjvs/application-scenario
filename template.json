@@ -1,0 +1,99 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "username": {
+            "type": "string",
+            "minLength": 1,
+            "metadata": {
+                "description": "Admin username"
+            }
+        },
+        "password": {
+            "type": "securestring",
+            "metadata": {
+                "description": "Admin password"
+            }
+        },
+        "resourcePrefix": {
+            "type": "string",
+            "metadata": {
+                "description": "The string that prefixes all resources"
+            }
+        }
+    },
+    "variables": {
+        "resourcePrefix": "[if(empty(parameters('resourcePrefix')),concat(resourceGroup().name,'-cloud'),concat(parameters('resourcePrefix'),'-cloud'))]",
+        "storageAccountName": "[if(greater(length(replace(concat(variables('resourcePrefix'),'-sa'),'-','')),24),substring(replace(concat(variables('resourcePrefix'),'-sa'),'-',''),0,24),replace(concat(variables('resourcePrefix'),'-sa'),'-',''))]"
+    },
+    "resources": [
+        {
+            "name": "[concat(variables('resourcePrefix'),'-sql')]",
+            "type": "Microsoft.Sql/servers",
+            "location": "[resourceGroup().location]",
+            "apiVersion": "2014-04-01-preview",
+            "dependsOn": [],
+            "tags": {},
+            "properties": {
+                "administratorLogin": "[parameters('username')]",
+                "administratorLoginPassword": "[parameters('password')]"
+            },
+            "resources": [
+                {
+                    "name": "firewall-allow-azure",
+                    "type": "firewallrules",
+                    "location": "[resourceGroup().location]",
+                    "apiVersion": "2014-04-01-preview",
+                    "dependsOn": [
+                        "[concat(variables('resourcePrefix'),'-sql')]"
+                    ],
+                    "properties": {
+                        "startIpAddress": "0.0.0.0",
+                        "endIpAddress": "0.0.0.0"
+                    }
+                }
+            ]
+        },
+        {
+            "apiVersion": "2015-06-15",
+            "type": "Microsoft.Storage/storageAccounts",
+            "name": "[variables('storageAccountName')]",
+            "location": "[resourceGroup().location]",
+            "tags": {
+                "displayName": "storage-account"
+            },
+            "properties": {
+                "accountType": "Standard_LRS"
+            }
+        },
+        {
+            "type": "Microsoft.Storage/storageAccounts/blobServices",
+            "apiVersion": "2019-04-01",
+            "name": "[concat(variables('storageAccountName'), '/default')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts',variables('storageAccountName'))]"
+            ],
+            "properties": {
+                "cors": {
+                    "corsRules": []
+                },
+                "deleteRetentionPolicy": {
+                    "enabled": false
+                }
+            }
+        },
+        {
+            "name": "[concat(variables('storageAccountName'), '/default/game')]",
+            "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+            "apiVersion": "2018-07-01",
+            "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts',variables('storageAccountName'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts/blobServices',variables('storageAccountName'), 'default')]"
+            ],
+            "properties": {
+                "publicAccess": "Blob"
+            }
+        }
+    ],
+    "outputs": {}
+}

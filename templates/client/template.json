@@ -1,0 +1,712 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "vmPrefix": {
+            "type": "string",
+            "metadata": {
+                "description": "Virtual Machine prefix: <resourcePrefix>-<resourceType>-<vmPrefix> i.e. liam-ukso-nsg-web1 where web is the VM prefix."
+            },
+            "defaultValue": "web"
+        },
+        "resourcePrefix": {
+            "type": "string",
+            "metadata": {
+                "description": "The string that prefixes all resources"
+            },
+            "defaultValue": ""
+        },
+        "username": {
+            "type": "string",
+            "metadata": {
+                "description": "Username for the Virtual Machines"
+            },
+            "defaultValue": "liam"
+        },
+        "password": {
+            "type": "securestring",
+            "metadata": {
+                "description": "Password for the Virtual Machines"
+            },
+            "defaultValue": "aA1234567890"
+        },
+        "loadBalancerDNS": {
+            "type": "string",
+            "metadata": {
+                "description": "DNS prefix for the load balancer"
+            },
+            "defaultValue": ""
+        },
+        "sqlSettings": {
+            "type": "object",
+            "metadata": {
+                "description": "SQL Settings for the App"
+            }
+        },
+        "storageAccountURI": {
+            "type": "string",
+            "metadata": {
+                "description": "URI for the hosted storage account"
+            }
+        }
+    },
+    "variables": {
+        "fixLoadBalancerDNS": "[if(empty(parameters('loadBalancerDNS')),uniqueString(subscription().id),parameters('loadBalancerDNS'))]",
+        "fixResourcePrefix": "[if(empty(parameters('resourcePrefix')),resourceGroup().name,parameters('resourcePrefix'))]"
+    },
+    "resources": [
+        {
+            "name": "[concat(variables('fixResourcePrefix'),'-nsg-',parameters('vmPrefix'),copyIndex(1))]",
+            "type": "Microsoft.Network/networkSecurityGroups",
+            "apiVersion": "2018-08-01",
+            "location": "[resourceGroup().location]",
+            "copy": {
+                "count": 3,
+                "name": "cloudnsgLoop"
+            },
+            "properties": {
+                "securityRules": [
+                    {
+                        "name": "http",
+                        "properties": {
+                            "description": "Allow HTTP traffic to this VM",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "80",
+                            "sourceAddressPrefix": "*",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 100,
+                            "direction": "Inbound"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "apiVersion": "2018-08-01",
+            "type": "Microsoft.Network/networkInterfaces",
+            "name": "[concat(variables('fixResourcePrefix'),'-nic-',parameters('vmPrefix'),copyIndex(1))]",
+            "location": "[resourceGroup().location]",
+            "tags": {},
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/loadBalancers', concat(variables('fixResourcePrefix'),'-loadbalancer'))]",
+                "cloudnsgLoop",
+                "[concat(variables('fixResourcePrefix'),'-vnet')]"
+            ],
+            "copy": {
+                "count": 3,
+                "name": "cloudnicLoop"
+            },
+            "properties": {
+                "ipConfigurations": [
+                    {
+                        "name": "ipconfig1",
+                        "properties": {
+                            "privateIPAllocationMethod": "Dynamic",
+                            "subnet": {
+                                "id": "[concat(resourceId('Microsoft.Network/virtualNetworks', concat(variables('fixResourcePrefix'),'-vnet')), '/subnets/default')]"
+                            },
+                            "loadBalancerBackendAddressPools": [
+                                {
+                                    "id": "[concat(resourceId('Microsoft.Network/loadBalancers',concat(variables('fixResourcePrefix'),'-loadbalancer')), '/backendAddressPools/server')]"
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "networkSecurityGroup": {
+                    "id": "[resourceId('Microsoft.Network/networkSecurityGroups', concat(variables('fixResourcePrefix'),'-nsg-',parameters('vmPrefix'),copyIndex(1)))]"
+                }
+            }
+        },
+        {
+            "apiVersion": "2018-10-01",
+            "type": "Microsoft.Compute/virtualMachines",
+            "name": "[concat(variables('fixResourcePrefix'),'-vm-',parameters('vmPrefix'),copyIndex(1))]",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "cloudnicLoop"
+            ],
+            "tags": {},
+            "zones": [
+                "[copyIndex(1)]"
+            ],
+            "copy": {
+                "count": 3,
+                "name": "cloudvmloop"
+            },
+            "properties": {
+                "hardwareProfile": {
+                    "vmSize": "Standard_D2s_v3"
+                },
+                "osProfile": {
+                    "computerName": "[concat(parameters('vmPrefix'),copyIndex(1))]",
+                    "adminUsername": "[parameters('username')]",
+                    "adminPassword": "[parameters('password')]"
+                },
+                "storageProfile": {
+                    "imageReference": {
+                        "publisher": "MicrosoftWindowsServer",
+                        "offer": "WindowsServer",
+                        "sku": "2019-Datacenter",
+                        "version": "latest"
+                    },
+                    "osDisk": {
+                        "name": "[concat(variables('fixResourcePrefix'),'-disk-',parameters('vmPrefix'),copyIndex(1))]",
+                        "caching": "ReadWrite",
+                        "createOption": "FromImage",
+                        "managedDisk": {
+                            "storageAccountType": "Standard_LRS"
+                        }
+                    }
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('fixResourcePrefix'),'-nic-',parameters('vmPrefix'),copyIndex(1)))]"
+                        }
+                    ]
+                }
+            },
+            "resources": [
+                {
+                    "name": "config-app",
+                    "type": "extensions",
+                    "location": "[resourceGroup().location]",
+                    "apiVersion": "2015-06-15",
+                    "dependsOn": [
+                        "[concat(variables('fixResourcePrefix'),'-vm-',parameters('vmPrefix'),copyIndex(1))]"
+                    ],
+                    "tags": {},
+                    "properties": {
+                        "publisher": "Microsoft.Compute",
+                        "type": "CustomScriptExtension",
+                        "typeHandlerVersion": "1.4",
+                        "autoUpgradeMinorVersion": true,
+                        "settings": {
+                            "fileUris": [
+                                "[concat(parameters('storageAccountURI'),'game/deploy.ps1')]"
+                            ],
+                            "commandToExecute": "[concat('powershell -ExecutionPolicy Unrestricted -File deploy.ps1 -user ',parameters('sqlSettings').user,' -password ',parameters('sqlSettings').password,' -sqlserver ',parameters('sqlSettings').server)]"
+                        }
+                    }
+                },
+                {
+                    "name": "MicrosoftEnterpriseCloudMonitoring",
+                    "type": "extensions",
+                    "location": "[resourceGroup().location]",
+                    "apiVersion": "2015-05-01-preview",
+                    "dependsOn": [
+                        "[concat(variables('fixResourcePrefix'),'-vm-',parameters('vmPrefix'),copyIndex(1))]",
+                        "[concat(variables('fixResourcePrefix'),'-workspace')]"
+                    ],
+                    "properties": {
+                        "publisher": "Microsoft.EnterpriseCloud.Monitoring",
+                        "type": "MicrosoftMonitoringAgent",
+                        "typeHandlerVersion": "1.0",
+                        "autoUpgradeMinorVersion": true,
+                        "settings": {
+                            "workspaceId": "[reference(concat(variables('fixResourcePrefix'),'-workspace'), '2015-11-01-preview').customerId]",
+                            "azureResourceId": "[resourceId('Microsoft.Compute/virtualMachines',concat(variables('fixResourcePrefix'),'-vm-',parameters('vmPrefix'),copyIndex(1)))]",
+                            "stopOnMultipleConnections": "true"
+                        },
+                        "protectedSettings": {
+                            "workspaceKey": "[listKeys(concat(variables('fixResourcePrefix'),'-workspace'), '2015-11-01-preview').primarySharedKey]"
+                        }
+                    }
+                },
+                {
+                    "name": "DependencyAgentWindows",
+                    "type": "extensions",
+                    "location": "[resourceGroup().location]",
+                    "apiVersion": "2018-10-01",
+                    "dependsOn": [
+                        "[concat(variables('fixResourcePrefix'),'-vm-',parameters('vmPrefix'),copyIndex(1))]",
+                        "[concat(variables('fixResourcePrefix'),'-workspace')]",
+                        "MicrosoftEnterpriseCloudMonitoring"
+                    ],
+                    "properties": {
+                        "publisher": "Microsoft.Azure.Monitoring.DependencyAgent",
+                        "type": "DependencyAgentWindows",
+                        "typeHandlerVersion": "9.5",
+                        "autoUpgradeMinorVersion": true
+                    }
+                }
+            ]
+        },
+        {
+            "name": "[concat(variables('fixResourcePrefix'),'-vnet')]",
+            "type": "Microsoft.Network/virtualNetworks",
+            "apiVersion": "2018-08-01",
+            "location": "[resourceGroup().location]",
+            "tags": {},
+            "dependsOn": [
+                "[concat(variables('fixResourcePrefix'),'-udr')]"
+            ],
+            "properties": {
+                "addressSpace": {
+                    "addressPrefixes": [
+                        "10.0.0.0/16"
+                    ]
+                },
+                "subnets": [
+                    {
+                        "name": "default",
+                        "properties": {
+                            "addressPrefix": "10.0.0.0/24",
+                            "routeTable": {
+                                "id": "[resourceId('Microsoft.Network/routeTables',concat(variables('fixResourcePrefix'),'-udr'))]"
+                            }
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "name": "[concat(variables('fixResourcePrefix'),'-pip-loadbalancer')]",
+            "type": "Microsoft.Network/publicIPAddresses",
+            "apiVersion": "2018-08-01",
+            "location": "[resourceGroup().location]",
+            "tags": {},
+            "sku": {
+                "name": "Standard",
+                "tier": "Regional"
+            },
+            "properties": {
+                "publicIPAllocationMethod": "Static"
+            }
+        },
+        {
+            "name": "[concat(variables('fixResourcePrefix'),'-loadbalancer')]",
+            "type": "Microsoft.Network/loadBalancers",
+            "apiVersion": "2018-08-01",
+            "location": "[resourceGroup().location]",
+            "sku": {
+                "name": "Standard",
+                "tier": "Regional"
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/publicIPAddresses', concat(variables('fixResourcePrefix'),'-pip-loadbalancer'))]"
+            ],
+            "properties": {
+                "frontendIPConfigurations": [
+                    {
+                        "name": "server",
+                        "properties": {
+                            "publicIPAddress": {
+                                "id": "[resourceId('Microsoft.Network/publicIPAddresses', concat(variables('fixResourcePrefix'),'-pip-loadbalancer'))]"
+                            }
+                        }
+                    }
+                ],
+                "backendAddressPools": [
+                    {
+                        "name": "server"
+                    }
+                ],
+                "loadBalancingRules": [
+                    {
+                        "name": "web-80",
+                        "properties": {
+                            "frontendIPConfiguration": {
+                                "id": "[resourceId('Microsoft.Network/loadBalancers/frontendIPConfigurations', concat(variables('fixResourcePrefix'),'-loadbalancer'), 'server')]"
+                            },
+                            "backendAddressPool": {
+                                "id": "[resourceId('Microsoft.Network/loadBalancers/backendAddressPools', concat(variables('fixResourcePrefix'),'-loadbalancer'), 'server')]"
+                            },
+                            "protocol": "Tcp",
+                            "frontendPort": 80,
+                            "backendPort": 80,
+                            "enableFloatingIP": false,
+                            "idleTimeoutInMinutes": 5,
+                            "probe": {
+                                "id": "[resourceId('Microsoft.Network/loadBalancers/probes', concat(variables('fixResourcePrefix'),'-loadbalancer'), 'web-80-probe')]"
+                            }
+                        }
+                    }
+                ],
+                "probes": [
+                    {
+                        "name": "web-80-probe",
+                        "properties": {
+                            "protocol": "Tcp",
+                            "port": 80,
+                            "intervalInSeconds": 5,
+                            "numberOfProbes": 2
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "type": "microsoft.operationalinsights/workspaces",
+            "apiVersion": "2015-11-01-preview",
+            "name": "[concat(variables('fixResourcePrefix'),'-workspace')]",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "source": "Azure",
+                "sku": {
+                    "name": "pergb2018"
+                },
+                "retentionInDays": 30
+            }
+        },
+        {
+            "name": "[concat(variables('fixResourcePrefix'),'-udr')]",
+            "type": "Microsoft.Network/routeTables",
+            "apiVersion": "2018-08-01",
+            "location": "[resourceGroup().location]",
+            "tags": {},
+            "properties": {
+                "routes": [
+                    {
+                        "name": "default",
+                        "properties": {
+                            "addressPrefix": "0.0.0.0/0",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'1')]",
+                        "properties": {
+                            "addressPrefix": "13.104.145.160/27",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'2')]",
+                        "properties": {
+                            "addressPrefix": "13.104.146.64/26",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'3')]",
+                        "properties": {
+                            "addressPrefix": "20.38.106.0/23",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'4')]",
+                        "properties": {
+                            "addressPrefix": "20.39.208.0/20",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'5')]",
+                        "properties": {
+                            "addressPrefix": "20.39.224.0/21",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'6')]",
+                        "properties": {
+                            "addressPrefix": "20.150.18.0/25",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'7')]",
+                        "properties": {
+                            "addressPrefix": "20.190.143.0/25",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'8')]",
+                        "properties": {
+                            "addressPrefix": "40.79.215.0/24",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'9')]",
+                        "properties": {
+                            "addressPrefix": "40.80.0.0/22",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'10')]",
+                        "properties": {
+                            "addressPrefix": "40.81.128.0/19",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'11')]",
+                        "properties": {
+                            "addressPrefix": "40.82.88.0/22",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'12')]",
+                        "properties": {
+                            "addressPrefix": "40.90.17.32/27",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'13')]",
+                        "properties": {
+                            "addressPrefix": "40.90.17.160/27",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'14')]",
+                        "properties": {
+                            "addressPrefix": "40.90.29.192/26",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'15')]",
+                        "properties": {
+                            "addressPrefix": "40.90.128.112/28",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'16')]",
+                        "properties": {
+                            "addressPrefix": "40.90.128.160/28",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'17')]",
+                        "properties": {
+                            "addressPrefix": "40.90.131.64/27",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'18')]",
+                        "properties": {
+                            "addressPrefix": "40.90.139.64/27",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'19')]",
+                        "properties": {
+                            "addressPrefix": "40.90.153.64/27",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'20')]",
+                        "properties": {
+                            "addressPrefix": "40.90.154.0/26",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'21')]",
+                        "properties": {
+                            "addressPrefix": "40.120.32.0/19",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'22')]",
+                        "properties": {
+                            "addressPrefix": "40.126.15.0/25",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'23')]",
+                        "properties": {
+                            "addressPrefix": "51.11.0.0/18",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'24')]",
+                        "properties": {
+                            "addressPrefix": "51.104.0.0/19",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'25')]",
+                        "properties": {
+                            "addressPrefix": "51.104.192.0/18",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'26')]",
+                        "properties": {
+                            "addressPrefix": "51.105.0.0/18",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'27')]",
+                        "properties": {
+                            "addressPrefix": "51.105.64.0/20",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'28')]",
+                        "properties": {
+                            "addressPrefix": "51.140.0.0/17",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'29')]",
+                        "properties": {
+                            "addressPrefix": "51.140.128.0/18",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'30')]",
+                        "properties": {
+                            "addressPrefix": "51.141.128.32/27",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'31')]",
+                        "properties": {
+                            "addressPrefix": "51.141.129.64/26",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'32')]",
+                        "properties": {
+                            "addressPrefix": "51.141.130.0/25",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'33')]",
+                        "properties": {
+                            "addressPrefix": "51.141.135.0/24",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'34')]",
+                        "properties": {
+                            "addressPrefix": "51.141.144.0/22",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'35')]",
+                        "properties": {
+                            "addressPrefix": "51.141.192.0/18",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'36')]",
+                        "properties": {
+                            "addressPrefix": "51.143.128.0/18",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'37')]",
+                        "properties": {
+                            "addressPrefix": "51.145.0.0/17",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'38')]",
+                        "properties": {
+                            "addressPrefix": "52.108.50.0/23",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'39')]",
+                        "properties": {
+                            "addressPrefix": "52.109.28.0/22",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'40')]",
+                        "properties": {
+                            "addressPrefix": "52.114.80.0/22",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'41')]",
+                        "properties": {
+                            "addressPrefix": "52.114.88.0/22",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'42')]",
+                        "properties": {
+                            "addressPrefix": "52.136.21.0/24",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'43')]",
+                        "properties": {
+                            "addressPrefix": "52.151.64.0/18",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'44')]",
+                        "properties": {
+                            "addressPrefix": "52.239.187.0/25",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'45')]",
+                        "properties": {
+                            "addressPrefix": "52.239.231.0/24",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'46')]",
+                        "properties": {
+                            "addressPrefix": "52.245.64.0/22",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'47')]",
+                        "properties": {
+                            "addressPrefix": "52.253.162.0/23",
+                            "nextHopType": "Internet"
+                        }
+                    },
+                    {
+                        "name": "[concat(resourceGroup().location,'48')]",
+                        "properties": {
+                            "addressPrefix": "104.44.89.224/27",
+                            "nextHopType": "Internet"
+                        }
+                    }
+                ],
+                "disableBgpRoutePropagation": true
+            }
+        }
+    ],
+    "outputs": {}
+}

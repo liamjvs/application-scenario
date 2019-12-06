@@ -1,0 +1,1 @@
+az network route-table route create --name %s49 --route-table-name %s-udr --resource-group %s --next-hop-type VirtualAppliance --address-prefix <IP>/32 --next-hop-ip-address 192.168.1.1 --output none

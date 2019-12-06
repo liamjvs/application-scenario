@@ -1,0 +1,1 @@
+az network nsg rule create -g $1 --nsg-name $0 -n SQLServer --priority 100 --source-address-prefixes '*' --destination-address <IP> --direction Outbound --access Deny --destination-port-ranges '*' -o none
